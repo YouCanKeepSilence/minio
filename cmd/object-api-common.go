@@ -19,6 +19,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"strings"
@@ -336,54 +337,66 @@ func listObjects(ctx context.Context, obj ObjectLayer, bucket, prefix, marker, d
 	var nextMarker string
 
 	// List until maxKeys requested.
+	var wg sync.WaitGroup
 	for i := 0; i < maxKeys; {
-		walkResult, ok := <-walkResultCh
-		if !ok {
-			// Closed channel.
-			eof = true
-			break
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			walkResult, ok := <-walkResultCh
+			if !ok {
+				// Closed channel.
+				eof = true
+				//break
+				return
+			}
 
-		var objInfo ObjectInfo
-		var err error
-		if HasSuffix(walkResult.entry, SlashSeparator) {
-			for _, getObjectInfoDir := range getObjectInfoDirs {
-				objInfo, err = getObjectInfoDir(ctx, bucket, walkResult.entry)
-				if err == nil {
-					break
-				}
-				if err == errFileNotFound {
-					err = nil
-					objInfo = ObjectInfo{
-						Bucket: bucket,
-						Name:   walkResult.entry,
-						IsDir:  true,
+			var objInfo ObjectInfo
+			var err error
+			if HasSuffix(walkResult.entry, SlashSeparator) {
+				for _, getObjectInfoDir := range getObjectInfoDirs {
+					objInfo, err = getObjectInfoDir(ctx, bucket, walkResult.entry)
+					if err == nil {
+						break
+					}
+					if err == errFileNotFound {
+						err = nil
+						objInfo = ObjectInfo{
+							Bucket: bucket,
+							Name:   walkResult.entry,
+							IsDir:  true,
+						}
 					}
 				}
+			} else {
+				objInfo, err = getObjInfo(ctx, bucket, walkResult.entry)
 			}
-		} else {
-			objInfo, err = getObjInfo(ctx, bucket, walkResult.entry)
-		}
-		if err != nil {
-			// Ignore errFileNotFound as the object might have got
-			// deleted in the interim period of listing and getObjectInfo(),
-			// ignore quorum error as it might be an entry from an outdated disk.
-			if IsErrIgnored(err, []error{
-				errFileNotFound,
-				errErasureReadQuorum,
-			}...) {
-				continue
+			if err != nil {
+				// Ignore errFileNotFound as the object might have got
+				// deleted in the interim period of listing and getObjectInfo(),
+				// ignore quorum error as it might be an entry from an outdated disk.
+				if IsErrIgnored(err, []error{
+					errFileNotFound,
+					errErasureReadQuorum,
+				}...) {
+					return
+				}
+				fmt.Printf("------!!! !!!! %v \n", err)
+				return
+				//return loi, toObjectErr(err, bucket, prefix)
 			}
-			return loi, toObjectErr(err, bucket, prefix)
-		}
-		nextMarker = objInfo.Name
-		objInfos = append(objInfos, objInfo)
-		if walkResult.end {
-			eof = true
-			break
-		}
+			nextMarker = objInfo.Name
+			objInfos = append(objInfos, objInfo)
+			fmt.Printf("objInfos: %v: %v", i, objInfo)
+			fmt.Println("------")
+			if walkResult.end {
+				eof = true
+				//break
+				return
+			}
+		}()
 		i++
 	}
+	wg.Wait()
 
 	// Save list routine for the next marker if we haven't reached EOF.
 	params := listParams{bucket, recursive, nextMarker, prefix}
