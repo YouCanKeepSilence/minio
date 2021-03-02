@@ -338,6 +338,7 @@ func listObjects(ctx context.Context, obj ObjectLayer, bucket, prefix, marker, d
 
 	// List until maxKeys requested.
 	var wg sync.WaitGroup
+	var lock sync.Mutex
 	for i := 0; i < maxKeys; {
 		wg.Add(1)
 		go func() {
@@ -385,9 +386,11 @@ func listObjects(ctx context.Context, obj ObjectLayer, bucket, prefix, marker, d
 				//return loi, toObjectErr(err, bucket, prefix)
 			}
 			nextMarker = objInfo.Name
+			lock.Lock()
 			objInfos = append(objInfos, objInfo)
-			fmt.Printf("objInfos: %v: %v", i, objInfo)
-			fmt.Println("------")
+			//fmt.Printf("objInfos: %v: %v", i, objInfo)
+			//fmt.Println("------")
+			lock.Unlock()
 			if walkResult.end {
 				eof = true
 				//break
